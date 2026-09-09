@@ -2,11 +2,25 @@
 
 ## Current Milestone
 
-**M6 — Export & Polish: COMPLETE. V1 is done** — all six milestones
-green: `ruff check .` clean, `pytest` **176 passed**, entry point
-verified starting end-to-end.
+**M6 — Export & Polish: COMPLETE. V1 is done and live-verified** —
+all six milestones green (`ruff check .` clean, `pytest` **176 passed**),
+entry point verified starting end-to-end, plus a successful bounded
+live GitHub smoke test (see record below).
 
 ## Completed
+
+### Live GitHub smoke test (2026-09-09)
+
+- Ran the real pipeline against the live GitHub API with a
+  user-supplied token (kept only in gitignored `.env`, never logged or
+  persisted): 1 target (`openai`), repository search only, max 5 hits,
+  10-day lookback, throwaway temp-file DB, script kept outside the repo.
+- Result: `status=completed`, 5 candidates → 5 accepted, 0 errors.
+  Real discoveries included a Claude proxy, OpenAI-compatible adapters,
+  and one `unknown` fallback — exercising proxy / openai-compatible /
+  unknown classification paths end to end. Run row completed in DB.
+- Throwaway script and temp DB deleted afterwards; `git status`
+  confirmed the repo tree was untouched by the test.
 
 ### M6 — Export & Polish (2026-09-09)
 
