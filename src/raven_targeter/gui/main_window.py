@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import (
@@ -32,6 +33,7 @@ from raven_targeter.gui.results_page import ResultsPage
 from raven_targeter.gui.search_page import SearchPage
 from raven_targeter.gui.settings_page import SettingsPage
 from raven_targeter.models import Discovery, SearchRequest
+from raven_targeter.services.export_service import export_discoveries
 from raven_targeter.services.search_service import SearchWorker
 
 _PAGE_TITLES = ("Dashboard", "Search", "Results", "Settings")
@@ -45,17 +47,20 @@ class MainWindow(QMainWindow):
         settings: Settings,
         repository: RavenRepository,
         adapter_factory: Callable[[], GitHubAdapter] | None = None,
+        exports_dir: str | Path = "exports",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.settings = settings
         self.repository = repository
         self._adapter_factory = adapter_factory
+        self._exports_dir = exports_dir
         self._thread: QThread | None = None
         self._worker: SearchWorker | None = None
 
         self.setWindowTitle("Raven-Targeter")
         self.resize(1100, 700)
+        self.statusBar().showMessage("Idle.")
 
         self.nav = QListWidget()
         self.nav.addItems(_PAGE_TITLES)
@@ -79,6 +84,7 @@ class MainWindow(QMainWindow):
         self.search_page.search_requested.connect(self._on_search_requested)
         self.search_page.cancel_requested.connect(self._on_cancel_requested)
         self.results_page.detail_requested.connect(self._on_detail_requested)
+        self.results_page.export_requested.connect(self._on_export_visible)
 
         central = QWidget()
         layout = QHBoxLayout(central)
@@ -156,8 +162,30 @@ class MainWindow(QMainWindow):
 
     def _on_detail_requested(self, discovery: Discovery) -> None:
         dialog = ResultDetailDialog(self)
+        dialog.export_requested.connect(self._on_export_single)
         dialog.show_discovery(discovery)
         dialog.exec()
+
+    # -- export --------------------------------------------------------------
+
+    def _on_export_single(self, discovery: Discovery) -> None:
+        """Export one discovery (detail dialog) as JSON."""
+        try:
+            path = export_discoveries([discovery], self._exports_dir, "json")
+        except OSError as exc:
+            self.statusBar().showMessage(f"Export failed: {exc}")
+            return
+        self.statusBar().showMessage(f"Exported 1 result to {path}.")
+
+    def _on_export_visible(self, format: str) -> None:
+        """Export the currently filtered results in the requested format."""
+        items = self.results_page.visible_discoveries()
+        try:
+            path = export_discoveries(items, self._exports_dir, format)
+        except (OSError, ValueError) as exc:
+            self.statusBar().showMessage(f"Export failed: {exc}")
+            return
+        self.statusBar().showMessage(f"Exported {len(items)} result(s) to {path}.")
 
     def _refresh_dashboard(self) -> None:
         self.dashboard_page.refresh(self.repository.list_runs())

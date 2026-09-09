@@ -76,6 +76,21 @@ pytest
 ruff check .
 ```
 
+GUI tests run headless (`QT_QPA_PLATFORM=offscreen`); run `python app.py`
+on a machine with a display server for visual verification.
+
+## Export
+
+Export normalized discoveries (never raw API payloads) from the Results
+page (filtered view, JSON or CSV) or a single result from its detail
+dialog (JSON). Files land in `exports/YYYY-MM-DD/` with UTC timestamped
+names:
+
+```text
+exports/2026-09-09/raven-20260909-120000.json
+exports/2026-09-09/raven-20260909-120500.csv
+```
+
 ## Limitations
 
 - V1 only searches GitHub. No general web search, no Reddit/HN, no public
@@ -85,6 +100,9 @@ ruff check .
 - Classification and scoring are deterministic rule-based systems, not LLM
   judgment — they can be wrong or conservative (results fall back to
   `unknown` classification when evidence is weak, by design).
+- Code-search hits carry no dates of their own; they are kept only when
+  their parent repository qualifies as recent, and surface as
+  implementation evidence for that repository.
 - This is a discovery/analysis tool only. It never clones or executes code
   from discovered repositories.
 

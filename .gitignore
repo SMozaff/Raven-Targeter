@@ -13,6 +13,8 @@ venv/
 
 # Data / exports
 data/*.db
+data/*.db-shm
+data/*.db-wal
 data/*.sqlite*
 exports/*
 !exports/.gitkeep

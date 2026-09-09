@@ -2,9 +2,44 @@
 
 ## Current Milestone
 
-**M5 — End-to-End Search: COMPLETE.** Next: M6 — Export & Polish.
+**M6 — Export & Polish: COMPLETE. V1 is done** — all six milestones
+green: `ruff check .` clean, `pytest` **176 passed**, entry point
+verified starting end-to-end.
 
 ## Completed
+
+### M6 — Export & Polish (2026-09-09)
+
+- `services/export_service.py` — `export_json` (normalized
+  `model_dump(mode="json")` array), `export_csv` (flattened
+  `EXPORT_COLUMNS`, headers always written, quoting-safe), and
+  `export_discoveries` dispatcher (`ValueError` on unknown formats);
+  files go to `exports/YYYY-MM-DD/raven-<UTC stamp>.<ext>`, created on
+  demand. No GUI imports, no raw payloads, no token anywhere near it.
+- Wiring: ResultsPage gains Export JSON/CSV buttons (`export_requested`
+  signal) exporting the *filtered view* via new `visible_discoveries`;
+  detail dialog's Export-selected flows to JSON; `MainWindow` owns both
+  handlers plus a status-bar confirmation line and a testable
+  `exports_dir` parameter.
+- 10 tests in `tests/test_export_service.py`: JSON shape/round-trip,
+  CSV header/quoting/empty, dispatcher rejection, flatten stringness,
+  button signals, filter-respecting visible export, and both MainWindow
+  handlers writing real files with status confirmation.
+- Polish: README gained an Export section and refreshed Limitations;
+  new `CHANGELOG.md` (M0–M6); `pyproject.toml` floor raised to
+  `>=3.12` / ruff `py312` (the codebase already requires 3.11+ via
+  `datetime.UTC`).
+- Final gates: `ruff check .` clean, `pytest` **176 passed**
+  (166 + 10), `python app.py` verified starting offscreen (settings →
+  token warning → schema init).
+- Also closed a `.gitignore` gap found during final verification: WAL
+  sidecars (`data/*.db-shm`, `data/*.db-wal`) from real runs are now
+  ignored alongside `data/*.db`.
+- Honesty note: one full-suite run during M6 showed a single
+  unidentified failure, green on immediate re-run and across seven
+  subsequent full runs. Not reproduced since; suspected sandbox thread-
+  timing flake. If it recurs, capture the test name with `-rf` and
+  treat it as a real bug.
 
 ### M5 — End-to-End Search (2026-09-09)
 
@@ -205,10 +240,12 @@ Nothing — M1 closed out.
 
 ## Next
 
-- M6 — Export & Polish: `services/export_service.py` (JSON/CSV of
-  normalized discoveries, outside GUI widgets), result-detail Export
-  button wiring, final full-suite + ruff pass, README/docs touch-up,
-  CHANGELOG if warranted.
+V1 is complete. If new work is requested, candidate follow-ups (all
+explicitly out of V1 scope — need human sign-off first):
+
+- Web-search adapter layer (per AGENTS.md constraints)
+- Scheduler / desktop notifications
+- Packaged builds (PyInstaller `.exe` / `.app` / AppImage)
 
 ## Files Changed This Milestone
 
@@ -261,6 +298,15 @@ src/raven_targeter/gui/main_window.py   (search wiring: thread, slots, teardown)
 src/raven_targeter/gui/results_page.py  (append_discovery for streaming)
 src/raven_targeter/core/deduplicator.py (merge_key always normalizes)
 tests/test_search_service.py
+
+M6:
+src/raven_targeter/services/export_service.py
+src/raven_targeter/gui/main_window.py   (export handlers + status bar + exports_dir)
+src/raven_targeter/gui/results_page.py  (export buttons + visible_discoveries)
+tests/test_export_service.py
+README.md                               (Export section, refreshed Limitations)
+CHANGELOG.md                            (new)
+pyproject.toml                          (requires-python >=3.12, ruff py312)
 DEVELOPMENT_TRACKER.md
 
 M0 (earlier):
@@ -294,8 +340,9 @@ $ ruff check .
 All checks passed!
 
 $ QT_QPA_PLATFORM=offscreen python -m pytest -q
-166 passed in 3.55s   (32 M0 + 75 M1 + 24 M2 + 13 M3 + 13 M4 + 9 M5;
-M2 retry tests add a few seconds of real short backoff sleeps by design)
+176 passed in 3.11s   (32 M0 + 75 M1 + 24 M2 + 13 M3 + 13 M4 + 9 M5 +
+10 M6; M2 retry tests add a few seconds of real short backoff sleeps
+by design)
 ```
 
 Also manually verified (per spec's M0 verification step):
@@ -383,6 +430,12 @@ actually see/click through it.
 - **M5: threaded GUI tests poll for completion**, never hook signals
   after the fact — a sub-millisecond fake worker can emit `finished`
   before a deferred hookup runs.
+- **M6: export is a service, not a widget feature.** The GUI emits
+  *what* to export (single discovery / filtered view / format); the
+  service owns paths, naming, and serialization — so a future CLI can
+  reuse it untouched.
+- **M6: Python floor is 3.12.** The code already depended on 3.11+
+  (`datetime.UTC`); the project metadata now says so honestly.
 
 - **AGENTS.md instead of QWEN.md**: this build isn't done via Qwen Code, so
   the durable-instructions file is named generically. Explicit user choice.

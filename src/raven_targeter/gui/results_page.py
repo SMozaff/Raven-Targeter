@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -138,6 +139,7 @@ class ResultsPage(QWidget):
     """Sortable, filterable results table emitting detail requests."""
 
     detail_requested = Signal(Discovery)
+    export_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -168,6 +170,10 @@ class ResultsPage(QWidget):
         filter_layout.addWidget(self.active_check)
         filter_layout.addWidget(QLabel("Min score:"))
         filter_layout.addWidget(self.min_score_spin)
+        self.export_json_button = QPushButton("Export JSON")
+        self.export_csv_button = QPushButton("Export CSV")
+        filter_layout.addWidget(self.export_json_button)
+        filter_layout.addWidget(self.export_csv_button)
         filter_layout.addStretch(1)
 
         # -- table --
@@ -188,6 +194,8 @@ class ResultsPage(QWidget):
         self.new_check.toggled.connect(self._apply_filters)
         self.active_check.toggled.connect(self._apply_filters)
         self.min_score_spin.valueChanged.connect(self._apply_filters)
+        self.export_json_button.clicked.connect(lambda: self.export_requested.emit("json"))
+        self.export_csv_button.clicked.connect(lambda: self.export_requested.emit("csv"))
 
         layout = QVBoxLayout(self)
         layout.addLayout(filter_layout)
@@ -259,6 +267,19 @@ class ResultsPage(QWidget):
     def visible_row_count(self) -> int:
         """Rows passing the current filters (for tests and status bars)."""
         return self.proxy.rowCount()
+
+    def visible_discoveries(self) -> list[Discovery]:
+        """Filtered discoveries in current view order (for export)."""
+        items: list[Discovery] = []
+        for row in range(self.proxy.rowCount()):
+            source_index = self.proxy.mapToSource(self.proxy.index(row, 0))
+            discovery_id = self.model.data(
+                self.model.index(source_index.row(), 0), Qt.UserRole
+            )
+            discovery = self._discoveries.get(str(discovery_id))
+            if discovery is not None:
+                items.append(discovery)
+        return items
 
     # -- internal ------------------------------------------------------------
 
