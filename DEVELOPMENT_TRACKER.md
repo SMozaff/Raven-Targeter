@@ -2,9 +2,34 @@
 
 ## Current Milestone
 
-**M2 — GitHub Adapter: COMPLETE.** Next: M3 — Persistence.
+**M3 — Persistence: COMPLETE.** Next: M4 — GUI Shell.
 
 ## Completed
+
+### M3 — Persistence (2026-09-09)
+
+- `database/models.py` — SQLAlchemy 2.x `Base` + `SearchRun`
+  (status/counts/targets+sources as JSON), `DiscoveryRecord` (all five
+  score components + `total_score` snapshot for SQL sort/filter,
+  canonical URL + repo identity, score/provider indexes),
+  `Evidence` (ordered content rows per discovery), `SearchErrorRecord`
+  (explicit adapter errors per run); FK cascades throughout
+- `database/database.py` — `build_engine` from `RAVEN_DB_URL` (creates
+  parent dirs, `check_same_thread=False`, WAL + `foreign_keys=ON`
+  pragmas), `init_db` (idempotent `create_all`)
+- `database/repository.py` — `RavenRepository` facade: create/complete/
+  get/list runs, save/query discoveries (provider/classification/
+  min-score filters, score-desc order), save/get errors; reads return
+  detached data only (`Discovery`, `RunSummary`) — session-safe for Qt
+  workers; SQLite-naive datetimes re-attached to UTC on every read;
+  `complete_run` raises `KeyError` on unknown IDs instead of failing
+  silently
+- 13 new tests in `tests/test_persistence.py` on temp SQLite files:
+  run lifecycle, full-field round-trip, UTC-aware read-back, score
+  ordering, all filters, error round-trip, empty-save zeroes, newest-
+  first listing — plus a `GITHUB_TOKEN`-never-stored test that scans the
+  raw DB bytes (and WAL sidecars)
+- `ruff check .` clean, `pytest`: **144 passed** (131 + 13)
 
 ### M2 — GitHub Adapter (2026-09-09)
 
@@ -115,10 +140,11 @@ Nothing — M1 closed out.
 
 ## Next
 
-- M3 — Persistence: SQLAlchemy 2.x models (`search_runs`, `discoveries`,
-  `evidence`, `search_errors`), engine/session factory from `RAVEN_DB_URL`,
-  repository pattern (save/query runs + discoveries), tests on a temp
-  SQLite file. Never store `GITHUB_TOKEN` or harvested secrets.
+- M4 — GUI Shell: PySide6 navigation (Dashboard/Search/Results/Settings
+  via `QStackedWidget`), search controls, sortable/filterable results
+  table, detail panel, settings page (token status only, never the
+  value). Headless offscreen smoke tests where possible; user runs
+  `python app.py` locally for visual verification.
 
 ## Files Changed This Milestone
 
@@ -149,6 +175,12 @@ src/raven_targeter/adapters/base.py
 src/raven_targeter/adapters/github.py
 src/raven_targeter/adapters/github_gists.py
 tests/test_github_adapter.py
+
+M3:
+src/raven_targeter/database/models.py
+src/raven_targeter/database/database.py
+src/raven_targeter/database/repository.py
+tests/test_persistence.py
 DEVELOPMENT_TRACKER.md
 
 M0 (earlier):
@@ -182,8 +214,8 @@ $ ruff check .
 All checks passed!
 
 $ QT_QPA_PLATFORM=offscreen python -m pytest -q
-131 passed in 4.02s   (32 M0 + 75 M1 + 24 M2; M2 retry tests add ~4 s of
-real short backoff sleeps by design)
+144 passed in 2.24s   (32 M0 + 75 M1 + 24 M2 + 13 M3; M2 retry tests add
+a few seconds of real short backoff sleeps by design)
 ```
 
 Also manually verified (per spec's M0 verification step):
@@ -231,6 +263,18 @@ actually see/click through it.
   `query.keywords`, a `SearchRequest`-only field; user keywords already
   live in `QueryVariant.query_text` via the builder. Adapter now matches
   against alias names/intents + the query text itself.
+- **M3: `total_score` is a stored snapshot**, not a live computation, so
+  SQL can order/filter by it. It is computed from the centralized
+  weights at save time; weight changes apply to newly saved runs.
+- **M3: UTC is re-attached on read** because SQLite drops tzinfo. The
+  `_aware` helper in `repository.py` is the single place this happens;
+  writers must still pass UTC-aware datetimes (Pydantic enforces it).
+- **M3: repository returns detached data only** (Pydantic `Discovery`,
+  `RunSummary` dataclass) — no ORM objects escape the session, keeping
+  Qt worker threads safe in M5.
+- **M3: fixed a session bug caught by tests** — the facade passed the
+  `sessionmaker` itself as a `Session` bind; all call sites now use
+  `self._factory()`.
 
 - **AGENTS.md instead of QWEN.md**: this build isn't done via Qwen Code, so
   the durable-instructions file is named generically. Explicit user choice.
