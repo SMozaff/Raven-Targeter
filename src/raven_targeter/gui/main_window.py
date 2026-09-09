@@ -5,7 +5,7 @@ import asyncio
 from pathlib import Path
 
 import httpx
-from PySide6.QtCore import QObject, QSettings, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QSettings, Qt, QThread, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -35,7 +35,7 @@ from raven_targeter.services.search_service import SearchPipeline
 
 
 class SearchWorker(QObject):
-    done = Signal(object, object)
+    done = Signal(object, object, object)
     failed = Signal(str)
 
     def __init__(
@@ -77,8 +77,8 @@ class SearchWorker(QObject):
                     await web.aclose()
 
         try:
-            discoveries, errors = asyncio.run(go())
-            self.done.emit(discoveries, errors)
+            discoveries, errors, leak_alerts = asyncio.run(go())
+            self.done.emit(discoveries, errors, leak_alerts)
         except Exception as exc:  # noqa: BLE001 - surfaced to GUI boundary
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
@@ -162,6 +162,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings = settings
         self._results = []
+        self._leak_alerts = []
         self._thread: QThread | None = None
         self._worker: SearchWorker | None = None
         self._test_threads: list[QThread] = []
@@ -178,6 +179,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         root_layout.addWidget(self.tabs)
         self._build_search_tab()
+        self._build_disclosure_tab()
         self._build_settings_tab()
         self._refresh_api_status()
         self._update_start_state()
@@ -255,6 +257,83 @@ class MainWindow(QMainWindow):
         self.web_source.toggled.connect(self._update_start_state)
         for cb in self.targets.values():
             cb.toggled.connect(self._update_start_state)
+
+    def _build_disclosure_tab(self) -> None:
+        """Responsible-disclosure alerts: repo/file/line + confidence only.
+
+        This tab never displays a raw credential. Each row shows a redacted
+        preview (e.g. sk-ab12****wxyz) and the repo URL, so a human can open
+        the repo and, if the leak looks real, responsibly notify the owner.
+        """
+        self.disclosure_tab = QWidget()
+        self.tabs.addTab(self.disclosure_tab, "Disclosure")
+        layout = QVBoxLayout(self.disclosure_tab)
+
+        info = QLabel(
+            "Possible exposed credentials found during search. Only a redacted "
+            "preview and location are shown — never the actual secret. Verify "
+            "at the repo URL, then responsibly notify the maintainer so they "
+            "can rotate it."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        self.disclosure_status = QLabel("No leak alerts yet.")
+        layout.addWidget(self.disclosure_status)
+
+        self.disclosure_table = QTableWidget(0, 7)
+        self.disclosure_table.setHorizontalHeaderLabels(
+            ["Confidence", "Pattern", "Preview", "Repo", "File", "Line", "Status"]
+        )
+        self.disclosure_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.disclosure_table)
+
+        action_row = QHBoxLayout()
+        self.mark_reviewed = QPushButton("Mark Selected: Reviewed")
+        self.mark_disclosed = QPushButton("Mark Selected: Disclosed")
+        self.mark_dismissed = QPushButton("Mark Selected: Dismissed (false positive)")
+        action_row.addWidget(self.mark_reviewed)
+        action_row.addWidget(self.mark_disclosed)
+        action_row.addWidget(self.mark_dismissed)
+        action_row.addStretch()
+        layout.addLayout(action_row)
+
+        self.mark_reviewed.clicked.connect(lambda: self._set_selected_alert_status("reviewed"))
+        self.mark_disclosed.clicked.connect(lambda: self._set_selected_alert_status("disclosed"))
+        self.mark_dismissed.clicked.connect(lambda: self._set_selected_alert_status("dismissed"))
+
+    def _populate_disclosure_table(self) -> None:
+        self.disclosure_table.setRowCount(len(self._leak_alerts))
+        for row, alert in enumerate(self._leak_alerts):
+            values = [
+                f"{alert.confidence:.2f}",
+                alert.pattern_name,
+                alert.redacted_preview,
+                alert.repo_identity or alert.repo_url,
+                alert.source_file or "",
+                str(alert.line_number),
+                alert.status,
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setData(Qt.ItemDataRole.UserRole, alert.id)
+                self.disclosure_table.setItem(row, column, item)
+        self.disclosure_status.setText(
+            f"{len(self._leak_alerts)} possible leak(s) found this run."
+            if self._leak_alerts
+            else "No leak alerts this run."
+        )
+
+    def _set_selected_alert_status(self, status: str) -> None:
+        rows = {idx.row() for idx in self.disclosure_table.selectedIndexes()}
+        if not rows:
+            return
+        for row in rows:
+            if row >= len(self._leak_alerts):
+                continue
+            alert = self._leak_alerts[row]
+            self._leak_alerts[row] = alert.model_copy(update={"status": status})
+        self._populate_disclosure_table()
 
     def _build_settings_tab(self) -> None:
         self.settings_tab = QWidget()
@@ -551,8 +630,9 @@ class MainWindow(QMainWindow):
         self._thread = None
         self._update_start_state()
 
-    def _done(self, discoveries, errors) -> None:
+    def _done(self, discoveries, errors, leak_alerts) -> None:
         self._results = discoveries
+        self._leak_alerts = list(leak_alerts)
         self.table.setRowCount(len(discoveries))
         for row, discovery in enumerate(discoveries):
             values = [
@@ -566,9 +646,11 @@ class MainWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 self.table.setItem(row, column, QTableWidgetItem(value))
-        self.status.setText(
-            f"Complete: {len(discoveries)} results, {len(errors)} source error(s)"
-        )
+        self._populate_disclosure_table()
+        status_parts = [f"{len(discoveries)} results", f"{len(errors)} source error(s)"]
+        if self._leak_alerts:
+            status_parts.append(f"{len(self._leak_alerts)} possible leak(s) — see Disclosure tab")
+        self.status.setText("Complete: " + ", ".join(status_parts))
         self.export.setEnabled(bool(discoveries))
 
     def _failed(self, message: str) -> None:
