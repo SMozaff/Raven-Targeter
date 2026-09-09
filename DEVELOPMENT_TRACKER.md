@@ -2,12 +2,32 @@
 
 ## Current Milestone
 
-**M6 — Export & Polish: COMPLETE. V1 is done and live-verified** —
-all six milestones green (`ruff check .` clean, `pytest` **176 passed**),
-entry point verified starting end-to-end, plus a successful bounded
-live GitHub smoke test (see record below).
+**Packaging: Linux done** — `dist/Raven-Targeter` (one-file binary) and
+`dist/Raven-Targeter-x86_64.AppImage` built and smoke-tested headless.
+Windows `.exe` / macOS `.app` specs ship ready to build natively
+(PyInstaller cannot cross-compile).
 
 ## Completed
+
+### Packaging — Linux binary + AppImage (2026-09-09)
+
+- `packaging/{linux,windows,macos}.spec` — one-file, windowed
+  (`console=False`) specs named `Raven-Targeter`, with explicit
+  `raven_targeter` hidden imports and CWD-relative source resolution
+  (specs run from the repo root). macOS bundle ID
+  `com.raventargeter.app`. `packaging/README.md` documents per-OS
+  commands, runtime secret handling (nothing bundled — `.env`/env read
+  at launch), and icon hookup.
+- `pyproject.toml` gains a `packaging` extra (`pyinstaller>=6.0`).
+- Verified: 82 MB binary starts offscreen with token (`.env` picked
+  up, no warning) and without (`GITHUB_TOKEN=` empty → rate-limit
+  warning, app continues); 83 MB AppImage (extracted-`appimagetool`
+  build, no FUSE needed to build) starts the same way. Placeholder
+  dark PNG stands in for real branding.
+- `dist/` + `build/` stay gitignored; only specs + README committed.
+- Gates still green: ruff clean, 176 passed.
+- Open: Windows `.exe` and macOS `.app` must be built on those
+  machines; no real application icons yet.
 
 ### Live GitHub smoke test (2026-09-09)
 
@@ -49,11 +69,11 @@ live GitHub smoke test (see record below).
 - Also closed a `.gitignore` gap found during final verification: WAL
   sidecars (`data/*.db-shm`, `data/*.db-wal`) from real runs are now
   ignored alongside `data/*.db`.
-- Honesty note: one full-suite run during M6 showed a single
-  unidentified failure, green on immediate re-run and across seven
-  subsequent full runs. Not reproduced since; suspected sandbox thread-
-  timing flake. If it recurs, capture the test name with `-rf` and
-  treat it as a real bug.
+- Honesty note: two full-suite runs (out of ~18) each showed a single
+  unidentified fast failure, green on immediate re-run every time and
+  unreproducible across 6× consecutive looped runs. Suspected sandbox
+  thread-timing flake in the Qt/worker tests. If it recurs, capture the
+  test name with `-rf` and treat it as a real bug.
 
 ### M5 — End-to-End Search (2026-09-09)
 
