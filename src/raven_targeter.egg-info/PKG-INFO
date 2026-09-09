@@ -1,0 +1,119 @@
+Metadata-Version: 2.4
+Name: raven-targeter
+Version: 0.1.0
+Summary: Desktop app that discovers recent, user-created AI API projects and integrations on GitHub.
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: PySide6>=6.6
+Requires-Dist: httpx>=0.27
+Requires-Dist: SQLAlchemy>=2.0
+Requires-Dist: pydantic>=2.5
+Requires-Dist: pydantic-settings>=2.1
+Requires-Dist: python-dateutil>=2.8
+Requires-Dist: tenacity>=8.2
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Requires-Dist: ruff>=0.4; extra == "dev"
+Dynamic: license-file
+
+# Raven-Targeter
+
+A cross-platform desktop application that discovers **recently created or
+recently active, user-created AI API projects on GitHub** — unofficial
+wrappers, SDKs, proxies, gateways, OpenAI-compatible adapters, and related
+issues/PRs — for a configurable set of AI provider targets.
+
+Default targets: OpenAI, Anthropic (Claude), Google Gemini, xAI (Grok),
+DeepSeek.
+
+Every result comes from a real GitHub API response and keeps its source URL,
+evidence, and timestamps. This tool does not ask an LLM what it remembers —
+it searches real public GitHub data.
+
+## V1 Scope
+
+- GitHub repository search
+- GitHub code search (used for implementation evidence within shortlisted
+  repos — GitHub's code search API doesn't support date filters, so repos
+  are shortlisted by repo/issue search first)
+- GitHub issue search
+- README enrichment for shortlisted repositories
+- 10-day (configurable) UTC-based date validation, distinguishing
+  `created_at` / `updated_at` / `pushed_at`
+- Deterministic (non-LLM) classification and relevance/freshness scoring
+- Deduplication by canonical URL and repository identity
+- SQLite persistence
+- Desktop GUI: Dashboard, Search, Results, Settings
+- JSON/CSV export
+
+**Not in V1** (see `AGENTS.md` for the full list and rationale): general web
+search, Reddit/HN/package-registry adapters, public shared-chat-page
+discovery, LLM summarization, headless browsers, or executing any code from
+discovered repositories.
+
+## Setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate   # or .venv\Scripts\activate on Windows
+pip install -e ".[dev]"
+cp .env.example .env
+# Edit .env and add your GITHUB_TOKEN (recommended — see below)
+```
+
+## Environment Variables
+
+| Variable                        | Default                        | Description                                  |
+| -------------------------------- | ------------------------------- | --------------------------------------------- |
+| `GITHUB_TOKEN`                   | *(none)*                        | GitHub personal access token. Strongly recommended — see below. |
+| `RAVEN_TARGETS`                  | `openai,anthropic,gemini,grok,deepseek` | Comma-separated target providers. |
+| `RAVEN_LOOKBACK_DAYS`            | `10`                             | How many days back to search. |
+| `RAVEN_MAX_RESULTS_PER_SOURCE`   | `200`                            | Max accepted results per source per run. |
+| `RAVEN_DB_URL`                   | `sqlite:///data/raven.db`        | SQLAlchemy database URL. |
+| `RAVEN_LOG_LEVEL`                | `INFO`                           | `DEBUG` / `INFO` / `WARNING` / `ERROR`. |
+
+### About `GITHUB_TOKEN`
+
+The app runs without one, but **unauthenticated GitHub API requests are
+limited to 60/hour**, which is not enough for real search runs. With a token,
+the limit is 5,000/hour. Create a fine-grained personal access token with
+read-only public repository access at
+https://github.com/settings/personal-access-tokens and put it in `.env`.
+**Never commit `.env` or the token value anywhere.**
+
+## Running the GUI
+
+```bash
+python app.py
+```
+
+## Running Tests
+
+```bash
+pytest
+ruff check .
+```
+
+## Limitations
+
+- V1 only searches GitHub. No general web search, no Reddit/HN, no public
+  shared-chat-page discovery yet.
+- Gist discovery is a documented, disabled-by-default placeholder — GitHub
+  has no full-text Gist search API.
+- Classification and scoring are deterministic rule-based systems, not LLM
+  judgment — they can be wrong or conservative (results fall back to
+  `unknown` classification when evidence is weak, by design).
+- This is a discovery/analysis tool only. It never clones or executes code
+  from discovered repositories.
+
+## Planned (Future) Web-Search Layer
+
+A later version may add a web-search adapter layer (general search engines,
+Reddit, Hacker News, package registries) as described in the original
+product manifest. That work is intentionally deferred and requires its own
+scoping pass — particularly for anything touching public shared-chat pages
+from other AI platforms, which raises separate scope/ToS questions beyond
+what V1 covers.

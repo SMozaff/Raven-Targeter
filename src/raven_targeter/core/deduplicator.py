@@ -1,108 +1,59 @@
-"""Deduplication by canonical URL and repository identity.
-
-The same repository can surface through repository search, code search,
-and issue search. Instead of showing it repeatedly, hits that resolve to
-the same canonical URL are merged into one discovery with combined
-``matched_terms`` and ``evidence``.
-
-Issues/PRs carry their own distinct URLs, so they naturally remain
-separate records — but each merged or surviving record keeps its parent
-``repo_identity`` (``github.com/owner/repo``) so the GUI can link an
-issue/PR back to its repository.
-"""
-
+"""Deduplication that merges repository and code evidence by repository identity."""
 from __future__ import annotations
 
-from raven_targeter.models import Discovery
-from raven_targeter.utils.urls import canonical_repo_identity, canonicalize_url
+from raven_targeter.models import CandidateEndpoint, Discovery
+from raven_targeter.utils.urls import canonicalize_url
 
 
-def merge_key(discovery: Discovery) -> str:
-    """Grouping key for deduplication: the normalized canonical URL.
-
-    The stored ``canonical_url`` is normalized again (idempotent) so that
-    hand-built or legacy records with un-normalized values still merge
-    with adapter-produced ones.
-    """
-    return canonicalize_url(discovery.canonical_url or discovery.url)
+def merge_key(d: Discovery) -> str:
+    if d.source_type in {"repository", "code"} and d.repo_identity:
+        return f"repo:{d.repo_identity.lower()}"
+    return f"url:{canonicalize_url(d.canonical_url or d.url)}"
 
 
-def _merge_union(first: list[str], second: list[str]) -> list[str]:
-    """Order-preserving union of two string lists."""
-    seen = set(first)
-    merged = list(first)
-    for item in second:
-        if item not in seen:
-            seen.add(item)
-            merged.append(item)
-    return merged
+def _union(a: list[str], b: list[str]) -> list[str]:
+    return list(dict.fromkeys([*a, *b]))
 
 
-def merge_group(primary: Discovery, duplicates: list[Discovery]) -> Discovery:
-    """Merge a group of same-URL discoveries into one record.
+def _merge_endpoints(a: list[CandidateEndpoint], b: list[CandidateEndpoint]) -> list[CandidateEndpoint]:
+    by_url = {x.url: x for x in a}
+    for item in b:
+        old = by_url.get(item.url)
+        if old is None or item.confidence > old.confidence:
+            by_url[item.url] = item
+    return sorted(by_url.values(), key=lambda x: (-x.confidence, x.url))
 
-    The primary (first-seen) record keeps its identity fields (id, source,
-    provider, title, author, dates, stars). Scores take the per-component
-    maximum across the group — merging evidence must never lower a score.
-    ``matched_terms`` and ``evidence`` are unioned. A provenance note is
-    appended to ``evidence`` recording how many duplicates were merged.
-    """
-    if not duplicates:
-        return primary
 
-    matched = list(primary.matched_terms)
-    evidence = list(primary.evidence)
-    scores = {
-        "relevance_score": primary.relevance_score,
-        "freshness_score": primary.freshness_score,
-        "implementation_score": primary.implementation_score,
-        "engagement_score": primary.engagement_score,
-        "confidence_score": primary.confidence_score,
-    }
-    for dup in duplicates:
-        matched = _merge_union(matched, list(dup.matched_terms))
-        evidence = _merge_union(evidence, list(dup.evidence))
-        for field in scores:
-            scores[field] = max(scores[field], float(getattr(dup, field)))
-
-    merged_sources = sorted({d.source_type for d in duplicates} | {primary.source_type})
-    evidence = _merge_union(
-        evidence,
-        [f"Merged {len(duplicates)} duplicate result(s) from: {', '.join(merged_sources)}"],
-    )
-    data = primary.model_dump()
-    data.update(scores)
-    data["matched_terms"] = matched
-    data["evidence"] = evidence
-    return Discovery(**data)
+def merge_group(group: list[Discovery]) -> Discovery:
+    # Prefer repository metadata over code metadata as primary.
+    primary = next((d for d in group if d.source_type == "repository"), group[0])
+    updates = primary.model_dump()
+    for d in group:
+        if d.id == primary.id:
+            continue
+        updates["matched_terms"] = _union(updates["matched_terms"], d.matched_terms)
+        updates["evidence"] = _union(updates["evidence"], d.evidence)
+        updates["candidate_endpoints"] = [x.model_dump() for x in _merge_endpoints(
+            [CandidateEndpoint(**x) if isinstance(x, dict) else x for x in updates["candidate_endpoints"]],
+            d.candidate_endpoints,
+        )]
+        for field in ("relevance_score", "freshness_score", "implementation_score", "engagement_score", "confidence_score"):
+            updates[field] = max(float(updates[field]), float(getattr(d, field)))
+        if primary.description is None and d.description:
+            updates["description"] = d.description
+    if len(group) > 1:
+        updates["evidence"] = _union(updates["evidence"], [f"Merged {len(group)-1} related hit(s) by repository identity"])
+    return Discovery(**updates)
 
 
 def deduplicate(discoveries: list[Discovery]) -> tuple[list[Discovery], int]:
-    """Merge discoveries sharing a canonical URL.
-
-    Returns:
-        Tuple of (merged discoveries in first-seen order, duplicates removed).
-    """
     groups: dict[str, list[Discovery]] = {}
     order: list[str] = []
-    for discovery in discoveries:
-        key = merge_key(discovery)
+    for d in discoveries:
+        key = merge_key(d)
         if key not in groups:
             groups[key] = []
             order.append(key)
-        groups[key].append(discovery)
-
-    merged: list[Discovery] = []
-    removed = 0
-    for key in order:
-        group = groups[key]
-        merged.append(merge_group(group[0], group[1:]))
-        removed += len(group) - 1
-    return merged, removed
-
-
-def attach_repo_identity(discovery: Discovery, owner: str, repo: str) -> Discovery:
-    """Return a copy of the discovery with its parent repo identity set."""
-    data = discovery.model_dump()
-    data["repo_identity"] = canonical_repo_identity(owner, repo)
-    return Discovery(**data)
+        groups[key].append(d)
+    merged = [merge_group(groups[k]) for k in order]
+    return merged, len(discoveries) - len(merged)

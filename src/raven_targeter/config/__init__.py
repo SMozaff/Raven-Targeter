@@ -1,1 +1,1 @@
-"""Configuration: settings, targets, and alias registry."""
+"""Package module."""

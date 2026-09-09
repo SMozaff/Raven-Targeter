@@ -1,56 +1,47 @@
-"""Engine creation and schema initialization for Raven-Targeter storage.
-
-V1 uses SQLite via ``RAVEN_DB_URL`` (default ``sqlite:///data/raven.db``).
-The engine factory keeps SQLite pragmas sane (WAL journal mode for
-concurrent GUI reads during background writes) and guarantees the parent
-directory exists for file-backed URLs.
-"""
-
+"""Minimal SQLAlchemy persistence for search results."""
 from __future__ import annotations
 
-import logging
+import json
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Float, String, Text, create_engine, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-logger = logging.getLogger(__name__)
-
-
-def _sqlite_path(db_url: str) -> Path | None:
-    """Extract the filesystem path from a ``sqlite:///`` URL, if any."""
-    prefix = "sqlite:///"
-    if db_url.startswith(prefix):
-        raw = db_url[len(prefix):]
-        if raw and raw != ":memory:":
-            return Path(raw)
-    return None
+from raven_targeter.models import Discovery
 
 
-def build_engine(db_url: str, *, echo: bool = False) -> Engine:
-    """Create a SQLAlchemy engine for the given database URL."""
-    path = _sqlite_path(db_url)
-    if path is not None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        engine = create_engine(
-            db_url,
-            echo=echo,
-            connect_args={"check_same_thread": False},
-        )
-
-        @event.listens_for(engine, "connect")
-        def _set_sqlite_pragmas(dbapi_connection: object, _: object) -> None:
-            cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.close()
-
-        return engine
-    return create_engine(db_url, echo=echo)
+class Base(DeclarativeBase):
+    pass
 
 
-def init_db(engine: Engine) -> None:
-    """Create all tables. Safe to call on an existing database."""
-    from raven_targeter.database.models import Base
+class DiscoveryRow(Base):
+    __tablename__ = "discoveries"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_type: Mapped[str] = mapped_column(String(32))
+    title: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(Text)
+    score: Mapped[float] = mapped_column(Float)
+    payload_json: Mapped[str] = mapped_column(Text)
 
-    Base.metadata.create_all(engine)
-    logger.info("Database schema initialized")
+
+class Database:
+    def __init__(self, url: str) -> None:
+        if url.startswith("sqlite:///"):
+            Path(url.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
+        self.engine = create_engine(url)
+        Base.metadata.create_all(self.engine)
+
+    def save(self, discoveries: list[Discovery]) -> None:
+        with Session(self.engine) as s:
+            for d in discoveries:
+                s.merge(DiscoveryRow(
+                    id=d.id, provider=d.provider, source_type=d.source_type, title=d.title,
+                    url=d.url, score=d.total_score, payload_json=d.model_dump_json(),
+                ))
+            s.commit()
+
+    def list(self) -> list[Discovery]:
+        with Session(self.engine) as s:
+            rows = s.scalars(select(DiscoveryRow).order_by(DiscoveryRow.score.desc())).all()
+            return [Discovery(**json.loads(r.payload_json)) for r in rows]

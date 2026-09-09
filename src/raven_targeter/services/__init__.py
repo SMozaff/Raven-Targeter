@@ -1,1 +1,1 @@
-"""Application services orchestrating engine, persistence, and export."""
+"""Package module."""

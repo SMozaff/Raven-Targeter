@@ -1,0 +1,143 @@
+name: Test and Build Desktop Apps
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: raven-targeter-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  QT_QPA_PLATFORM: offscreen
+
+jobs:
+  quality:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install project
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Pytest
+        run: pytest
+
+      - name: Compile Python sources
+        run: python -m compileall -q src app.py
+
+  desktop-build:
+    name: Build ${{ matrix.label }}
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux
+            artifact: Raven-Targeter-Linux
+            package: Raven-Targeter-linux.tar.gz
+          - os: windows-latest
+            label: Windows
+            artifact: Raven-Targeter-Windows
+            package: Raven-Targeter-windows.zip
+          - os: macos-14
+            label: macOS
+            artifact: Raven-Targeter-macOS
+            package: Raven-Targeter-macos.zip
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build dependencies
+        run: python -m pip install --upgrade pip && pip install -e ".[dev,packaging]"
+
+      # Run the test suite on every target OS, not only Linux, so platform-
+      # specific Qt/keyring/import failures block that platform's artifact.
+      - name: Ruff on target OS
+        run: ruff check .
+
+      - name: Tests on target OS
+        run: pytest
+
+      - name: Compile Python sources
+        run: python -m compileall -q src app.py
+
+      - name: Build Linux executable
+        if: runner.os == 'Linux'
+        shell: bash
+        run: >-
+          python -m PyInstaller --noconfirm --clean --windowed --onefile
+          --name Raven-Targeter --paths src
+          --collect-all keyring --collect-all pydantic --collect-all pydantic_settings
+          --hidden-import raven_targeter --hidden-import raven_targeter.gui.main_window
+          app.py
+
+      - name: Build Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >-
+          python -m PyInstaller --noconfirm --clean --windowed --onefile
+          --name Raven-Targeter --paths src
+          --collect-all keyring --collect-all pydantic --collect-all pydantic_settings
+          --hidden-import raven_targeter --hidden-import raven_targeter.gui.main_window
+          app.py
+
+      - name: Build macOS app
+        if: runner.os == 'macOS'
+        shell: bash
+        run: >-
+          python -m PyInstaller --noconfirm --clean --windowed
+          --name Raven-Targeter --paths src
+          --collect-all keyring --collect-all pydantic --collect-all pydantic_settings
+          --hidden-import raven_targeter --hidden-import raven_targeter.gui.main_window
+          app.py
+
+      - name: Package Linux artifact
+        if: runner.os == 'Linux'
+        shell: bash
+        run: tar -czf "${{ matrix.package }}" -C dist Raven-Targeter
+
+      - name: Package Windows artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "dist\Raven-Targeter.exe" -DestinationPath "${{ matrix.package }}" -Force
+
+      - name: Package macOS artifact
+        if: runner.os == 'macOS'
+        shell: bash
+        run: ditto -c -k --sequesterRsrc --keepParent dist/Raven-Targeter.app "${{ matrix.package }}"
+
+      - name: Upload desktop build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-${{ runner.arch }}
+          path: ${{ matrix.package }}
+          if-no-files-found: error
+          retention-days: 14

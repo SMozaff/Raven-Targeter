@@ -1,1 +1,1 @@
-"""Shared utility helpers: logging, dates, URLs."""
+"""Package module."""
