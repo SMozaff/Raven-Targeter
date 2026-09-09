@@ -2,9 +2,74 @@
 
 ## Current Milestone
 
-**M3 — Persistence: COMPLETE.** Next: M4 — GUI Shell.
+**M5 — End-to-End Search: COMPLETE.** Next: M6 — Export & Polish.
 
 ## Completed
+
+### M5 — End-to-End Search (2026-09-09)
+
+- `services/search_service.py` — two layers:
+  - `SearchPipeline` (Qt-free async): build queries → per-source-group
+    adapter search → classify (`classify_evidence`) → score (API
+    patterns → full breakdown, classification applied *before* scoring
+    so bonuses count) → date validation (repo/issue/PR must be recent;
+    dateless code hits survive only via an accepted parent repo) →
+    dedup → min-score filter → persist + close run. Stage messages
+    follow the spec ("Generating queries", "Searching repositories",
+    "Inspecting README files", "Searching issues", "Scoring", "Saving",
+    "Complete"). Unexpected failures mark the run `"failed"` with a
+    `pipeline` error row, then re-raise typed (`PipelineFailedError`);
+    cancellation closes the run as `"cancelled"`.
+  - `SearchWorker` (`QObject` for `QThread`): `Signal(object)` streaming
+    (`discovery_found`, progress message/percent, `finished(run_id)`,
+    `failed`, `search_cancelled`); cooperative cancel flag checked
+    between stages; adapter built/closed inside the worker thread.
+- `gui/main_window.py` — full wiring: Start spawns the worker thread
+  (GUI never blocks), progress → SearchPage, streamed hits →
+  `ResultsPage.append_discovery` (new), finish → final scored list +
+  dashboard refresh + auto-switch to Results; cancel/closeEvent
+  cooperate; failure reports via status line (no modal — headless-safe).
+- `core/deduplicator.py` — `merge_key` now normalizes unconditionally,
+  so hand-built records with raw `canonical_url` still merge (bug
+  caught by M5 tests).
+- 9 tests in `tests/test_search_service.py`: full-run accept/drop
+  matrix (merge, stale, orphan-code, child-code), min-score, error
+  persistence, cancel-before/mid-run, unexpected-failure closeout,
+  multi-target query coverage, real-QThread worker streaming, and a
+  MainWindow click → Results → Dashboard cycle on a fake adapter —
+  no network anywhere.
+- `ruff check .` clean, `pytest`: **166 passed** (157 + 9)
+
+### M4 — GUI Shell (2026-09-09)
+
+- `gui/main_window.py` — sidebar navigation (Dashboard/Search/Results/
+  Settings) over a `QStackedWidget`; `run_app` builds storage
+  (`build_engine` + `init_db` + `RavenRepository`) and owns the event
+  loop; `app.py` unchanged (same entry contract as M0)
+- `gui/search_page.py` — target checkboxes from canonical IDs, lookback
+  (1-365) / max-results / keyword / min-score controls, Start/Cancel
+  with running-state toggling, progress bar + status line; emits
+  `search_requested(SearchRequest)` / `cancel_requested` — no network
+  I/O in the page, M5 connects the signals
+- `gui/results_page.py` — `QTableView` over `QStandardItemModel` with
+  all ten spec columns, numeric/date-aware `_SortItem` ordering, and a
+  `QSortFilterProxyModel` filter bar (provider, classification, time
+  range, newly-created / recently-active via `core.date_validator`,
+  min score); full `Discovery` objects kept ID-keyed (never re-derived
+  from cell text); double-click emits `detail_requested`
+- `gui/result_detail.py` — modal dialog with title/URL/meta/scores/
+  description/terms/evidence, working Open-in-browser + Copy-URL, and
+  an `export_requested` signal for M6 export wiring
+- `gui/dashboard.py` — stat cards (`refresh` from detached
+  `RunSummary` list; M5 wires it) and `gui/settings_page.py` —
+  display-only effective config with token shown as Configured/Missing
+  only (value never rendered)
+- 13 offscreen tests in `tests/test_gui.py` (`QT_QPA_PLATFORM=offscreen`,
+  single module-scoped `QApplication`): navigation, request building,
+  signal emission, button toggling, table population, provider/score/
+  recency filters, selection + detail signal, dialog population/copy/
+  export, token masking, dashboard refresh
+- `ruff check .` clean, `pytest`: **157 passed** (144 + 13)
 
 ### M3 — Persistence (2026-09-09)
 
@@ -140,11 +205,10 @@ Nothing — M1 closed out.
 
 ## Next
 
-- M4 — GUI Shell: PySide6 navigation (Dashboard/Search/Results/Settings
-  via `QStackedWidget`), search controls, sortable/filterable results
-  table, detail panel, settings page (token status only, never the
-  value). Headless offscreen smoke tests where possible; user runs
-  `python app.py` locally for visual verification.
+- M6 — Export & Polish: `services/export_service.py` (JSON/CSV of
+  normalized discoveries, outside GUI widgets), result-detail Export
+  button wiring, final full-suite + ruff pass, README/docs touch-up,
+  CHANGELOG if warranted.
 
 ## Files Changed This Milestone
 
@@ -181,6 +245,22 @@ src/raven_targeter/database/models.py
 src/raven_targeter/database/database.py
 src/raven_targeter/database/repository.py
 tests/test_persistence.py
+
+M4:
+src/raven_targeter/gui/main_window.py   (rewritten: navigation + storage wiring)
+src/raven_targeter/gui/dashboard.py
+src/raven_targeter/gui/search_page.py
+src/raven_targeter/gui/results_page.py
+src/raven_targeter/gui/result_detail.py
+src/raven_targeter/gui/settings_page.py
+tests/test_gui.py
+
+M5:
+src/raven_targeter/services/search_service.py
+src/raven_targeter/gui/main_window.py   (search wiring: thread, slots, teardown)
+src/raven_targeter/gui/results_page.py  (append_discovery for streaming)
+src/raven_targeter/core/deduplicator.py (merge_key always normalizes)
+tests/test_search_service.py
 DEVELOPMENT_TRACKER.md
 
 M0 (earlier):
@@ -214,8 +294,8 @@ $ ruff check .
 All checks passed!
 
 $ QT_QPA_PLATFORM=offscreen python -m pytest -q
-144 passed in 2.24s   (32 M0 + 75 M1 + 24 M2 + 13 M3; M2 retry tests add
-a few seconds of real short backoff sleeps by design)
+166 passed in 3.55s   (32 M0 + 75 M1 + 24 M2 + 13 M3 + 13 M4 + 9 M5;
+M2 retry tests add a few seconds of real short backoff sleeps by design)
 ```
 
 Also manually verified (per spec's M0 verification step):
@@ -275,6 +355,34 @@ actually see/click through it.
 - **M3: fixed a session bug caught by tests** — the facade passed the
   `sessionmaker` itself as a `Session` bind; all call sites now use
   `self._factory()`.
+- **M4: pages emit signals, never run I/O.** `SearchPage` emits a
+  validated `SearchRequest`; `ResultsPage` emits `Discovery` detail
+  requests; `ResultDetailDialog` emits export requests. M5 connects
+  these to the service layer without touching the pages.
+- **M4: table filters are presentation-level** (fixed 10-day display
+  window). Exact run-window filtering stays in the request + repository
+  query, which M5 owns.
+- **M4: Qt6 `invalidate()`** is the non-deprecated proxy refresh in
+  PySide6 6.11 (`invalidateFilter` and `invalidateRowsFilter` both warn).
+- **M4: offscreen tests verify structure, not pixels.** Visual
+  verification needs `python app.py` on a machine with a display server
+  (sandbox has none).
+- **M5: pipeline owns stage order, worker owns threads, MainWindow owns
+  wiring.** `SearchPipeline` has no Qt import; `SearchWorker` bridges
+  with `Signal(object)`; `MainWindow` manages thread lifecycle. The
+  repository facade is shared across threads (one session per call,
+  SQLite WAL + `check_same_thread=False`).
+- **M5: per-source-group adapter calls** give progress granularity,
+  cancel points, and per-source caps — at the cost of one search call
+  per active group instead of one total. Breadth-first by design.
+- **M5: streaming shows pre-dedup hits**; the final `finished` payload
+  replaces them with the merged list. A streamed row can disappear on
+  merge — accepted and documented.
+- **M5: no modal dialogs in worker slots** — failure surfaces via the
+  status line so headless/offscreen runs never block on user input.
+- **M5: threaded GUI tests poll for completion**, never hook signals
+  after the fact — a sub-millisecond fake worker can emit `finished`
+  before a deferred hookup runs.
 
 - **AGENTS.md instead of QWEN.md**: this build isn't done via Qwen Code, so
   the durable-instructions file is named generically. Explicit user choice.

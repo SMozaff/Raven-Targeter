@@ -18,8 +18,13 @@ from raven_targeter.utils.urls import canonical_repo_identity, canonicalize_url
 
 
 def merge_key(discovery: Discovery) -> str:
-    """Grouping key for deduplication: the canonical URL."""
-    return discovery.canonical_url or canonicalize_url(discovery.url)
+    """Grouping key for deduplication: the normalized canonical URL.
+
+    The stored ``canonical_url`` is normalized again (idempotent) so that
+    hand-built or legacy records with un-normalized values still merge
+    with adapter-produced ones.
+    """
+    return canonicalize_url(discovery.canonical_url or discovery.url)
 
 
 def _merge_union(first: list[str], second: list[str]) -> list[str]:
