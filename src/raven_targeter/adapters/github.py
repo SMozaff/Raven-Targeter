@@ -63,7 +63,7 @@ class GitHubAdapter:
         self.rate_buckets: dict[str, tuple[int | None, float | None]] = {}
 
     @classmethod
-    def from_settings(cls, settings: Settings, **kwargs: Any) -> "GitHubAdapter":
+    def from_settings(cls, settings: Settings, **kwargs: Any) -> GitHubAdapter:
         return cls(settings.github_token, **kwargs)
 
     def _get_client(self) -> httpx.AsyncClient:

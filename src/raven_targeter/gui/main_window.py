@@ -18,9 +18,9 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QSpinBox,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -79,7 +79,7 @@ class SearchWorker(QObject):
         try:
             discoveries, errors = asyncio.run(go())
             self.done.emit(discoveries, errors)
-        except Exception as exc:  # surfaced to GUI
+        except Exception as exc:  # noqa: BLE001 - surfaced to GUI boundary
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
 
@@ -152,7 +152,7 @@ class ApiTestWorker(QObject):
 
         try:
             ok, message = asyncio.run(go())
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - surfaced to GUI boundary
             ok, message = False, f"{type(exc).__name__}: {exc}"
         self.finished.emit(ok, message)
 
@@ -296,12 +296,12 @@ class MainWindow(QMainWindow):
             self._ui_settings.value("search/provider", self.settings.search_api_provider)
         ).lower()
         idx = self.search_provider.findText(saved_provider)
-        self.search_provider.setCurrentIndex(idx if idx >= 0 else 0)
+        self.search_provider.setCurrentIndex(max(idx, 0))
         self.search_engine = QComboBox()
         self.search_engine.addItems(list(SEARCH_ENGINES))
         saved_engine = str(self._ui_settings.value("search/engine", self.settings.search_api_engine)).lower()
         idx = self.search_engine.findText(saved_engine)
-        self.search_engine.setCurrentIndex(idx if idx >= 0 else 0)
+        self.search_engine.setCurrentIndex(max(idx, 0))
         self.search_key_edit = QLineEdit()
         self.search_key_edit.setEchoMode(QLineEdit.Password)
         self.search_key_edit.setPlaceholderText("Paste Search API key to save or replace")

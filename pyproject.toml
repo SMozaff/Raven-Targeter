@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "raven-targeter"
-version = "0.3.0"
+version = "0.3.1"
 description = "Desktop GitHub discovery tool for recent user-created AI API projects and endpoints"
 requires-python = ">=3.12"
 dependencies = [

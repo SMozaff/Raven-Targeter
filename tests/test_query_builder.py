@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+
 from raven_targeter.core.query_builder import build_queries
 from raven_targeter.models import SearchRequest
 

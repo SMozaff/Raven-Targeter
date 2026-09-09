@@ -20,26 +20,28 @@ env:
 
 jobs:
   quality:
-    name: Lint and unit tests
+    name: Lint, tests, and compile
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install project
-        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
 
       - name: Ruff
-        run: ruff check .
+        run: python -m ruff check .
 
       - name: Pytest
-        run: pytest
+        run: python -m pytest
 
       - name: Compile Python sources
         run: python -m compileall -q src app.py
@@ -67,24 +69,24 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install build dependencies
-        run: python -m pip install --upgrade pip && pip install -e ".[dev,packaging]"
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,packaging]"
 
-      # Run the test suite on every target OS, not only Linux, so platform-
-      # specific Qt/keyring/import failures block that platform's artifact.
       - name: Ruff on target OS
-        run: ruff check .
+        run: python -m ruff check .
 
       - name: Tests on target OS
-        run: pytest
+        run: python -m pytest
 
       - name: Compile Python sources
         run: python -m compileall -q src app.py
@@ -118,6 +120,21 @@ jobs:
           --collect-all keyring --collect-all pydantic --collect-all pydantic_settings
           --hidden-import raven_targeter --hidden-import raven_targeter.gui.main_window
           app.py
+
+      - name: Verify Linux build exists
+        if: runner.os == 'Linux'
+        shell: bash
+        run: test -f dist/Raven-Targeter
+
+      - name: Verify Windows build exists
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: if (!(Test-Path "dist\Raven-Targeter.exe")) { throw "Windows executable missing" }
+
+      - name: Verify macOS build exists
+        if: runner.os == 'macOS'
+        shell: bash
+        run: test -d dist/Raven-Targeter.app
 
       - name: Package Linux artifact
         if: runner.os == 'Linux'

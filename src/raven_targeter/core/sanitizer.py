@@ -15,9 +15,11 @@ _PATTERNS = [
 def redact_text(text: str) -> str:
     out = text
     for pattern in _PATTERNS:
-        if pattern.groups >= 1 and "authorization" in pattern.pattern.lower():
-            out = pattern.sub(r"\1[REDACTED]", out)
-        elif pattern.groups >= 1 and "key|token" in pattern.pattern.lower():
+        preserve_prefix = pattern.groups >= 1 and (
+            "authorization" in pattern.pattern.lower()
+            or "key|token" in pattern.pattern.lower()
+        )
+        if preserve_prefix:
             out = pattern.sub(r"\1[REDACTED]", out)
         else:
             out = pattern.sub("[REDACTED]", out)

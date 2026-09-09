@@ -1,4 +1,5 @@
 import json
+
 from raven_targeter.models import CandidateEndpoint, Discovery
 from raven_targeter.services.export_service import export_json
 
