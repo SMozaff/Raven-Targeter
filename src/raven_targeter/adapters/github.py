@@ -11,8 +11,15 @@ import httpx
 from raven_targeter.config.aliases import get_aliases
 from raven_targeter.config.settings import Settings
 from raven_targeter.core.endpoint_extractor import extract_candidate_endpoints
+from raven_targeter.core.leak_detector import detect_leaks, high_confidence_findings
 from raven_targeter.core.sanitizer import find_matched_terms, redact_text
-from raven_targeter.models import AdapterSearchResult, Discovery, QueryVariant, SearchError
+from raven_targeter.models import (
+    AdapterSearchResult,
+    Discovery,
+    LeakAlert,
+    QueryVariant,
+    SearchError,
+)
 from raven_targeter.utils.dates import parse_github_timestamp
 from raven_targeter.utils.urls import canonical_repo_identity, canonicalize_url
 
@@ -137,6 +144,7 @@ class GitHubAdapter:
     async def search(self, queries: list[QueryVariant], max_results: int = 200) -> AdapterSearchResult:
         discoveries: list[Discovery] = []
         errors: list[SearchError] = []
+        leak_alerts: list[LeakAlert] = []
         for q in queries:
             if len(discoveries) >= max_results:
                 break
@@ -172,10 +180,10 @@ class GitHubAdapter:
         if discoveries and queries:
             kind = queries[0].search_type
             if kind == "repository":
-                await self._enrich_readmes(discoveries, errors)
+                await self._enrich_readmes(discoveries, errors, leak_alerts)
             elif kind == "code":
-                await self._enrich_code(discoveries, errors)
-        return AdapterSearchResult(discoveries=discoveries, errors=errors)
+                await self._enrich_code(discoveries, errors, leak_alerts)
+        return AdapterSearchResult(discoveries=discoveries, errors=errors, leak_alerts=leak_alerts)
 
     def _terms(self, q: QueryVariant) -> list[str]:
         aliases = get_aliases(q.target)
@@ -235,7 +243,9 @@ class GitHubAdapter:
         parts = url.split(marker, 1)[1].strip("/").split("/")
         return canonical_repo_identity(parts[0], parts[1]) if len(parts) >= 2 else None
 
-    async def _enrich_readmes(self, discoveries: list[Discovery], errors: list[SearchError]) -> None:
+    async def _enrich_readmes(
+        self, discoveries: list[Discovery], errors: list[SearchError], leak_alerts: list[LeakAlert]
+    ) -> None:
         count = 0
         for i, d in enumerate(discoveries):
             if count >= self.max_enrich or d.source_type != "repository" or not d.repo_identity:
@@ -248,7 +258,11 @@ class GitHubAdapter:
                 continue
             if response.status_code != 200:
                 continue
-            text = redact_text(response.text[:15000])
+            raw_text = response.text[:15000]
+            leak_alerts.extend(
+                self._build_leak_alerts(raw_text, discovery=d, source_file="README")
+            )
+            text = redact_text(raw_text)
             endpoints = extract_candidate_endpoints(text, source_file="README")
             discoveries[i] = d.model_copy(update={
                 "evidence": [*d.evidence, f"README excerpt: {text[:2500]}"],
@@ -256,7 +270,9 @@ class GitHubAdapter:
             })
             count += 1
 
-    async def _enrich_code(self, discoveries: list[Discovery], errors: list[SearchError]) -> None:
+    async def _enrich_code(
+        self, discoveries: list[Discovery], errors: list[SearchError], leak_alerts: list[LeakAlert]
+    ) -> None:
         count = 0
         for i, d in enumerate(discoveries):
             if count >= self.max_enrich or d.source_type != "code" or not d.repo_identity or not d.source_path:
@@ -272,13 +288,46 @@ class GitHubAdapter:
                 continue
             if response.status_code != 200:
                 continue
-            text = redact_text(response.text[:12000])
+            raw_text = response.text[:12000]
+            leak_alerts.extend(
+                self._build_leak_alerts(raw_text, discovery=d, source_file=d.source_path)
+            )
+            text = redact_text(raw_text)
             endpoints = extract_candidate_endpoints(text, source_file=d.source_path)
             discoveries[i] = d.model_copy(update={
                 "evidence": [*d.evidence, f"Code excerpt ({d.source_path}): {text[:2000]}"],
                 "candidate_endpoints": endpoints,
             })
             count += 1
+
+    @staticmethod
+    def _build_leak_alerts(
+        raw_text: str, *, discovery: Discovery, source_file: str | None
+    ) -> list[LeakAlert]:
+        """Run leak detection on raw (pre-redaction) text.
+
+        Only ever produces LeakAlert objects, whose fields are already
+        redacted/scored by leak_detector — the raw_text itself is never
+        stored, logged, or attached to the returned alerts.
+        """
+        findings = detect_leaks(raw_text, source_file=source_file)
+        alerts = []
+        for finding in high_confidence_findings(findings):
+            alerts.append(
+                LeakAlert(
+                    discovery_id=discovery.id,
+                    repo_identity=discovery.repo_identity,
+                    repo_url=discovery.url,
+                    source_file=finding.source_file,
+                    line_number=finding.line_number,
+                    pattern_name=finding.pattern_name,
+                    confidence=finding.confidence,
+                    entropy=finding.entropy,
+                    redacted_preview=finding.redacted_preview,
+                    context_line_redacted=finding.context_line_redacted,
+                )
+            )
+        return alerts
 
     @staticmethod
     def _error_message(response: httpx.Response) -> str:

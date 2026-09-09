@@ -30,6 +30,39 @@ class CandidateEndpoint(BaseModel):
     source_file: str | None = None
 
 
+class LeakAlert(BaseModel):
+    """Evidence that a likely credential leak exists at a public location.
+
+    This model NEVER carries the actual secret value — only a redacted
+    preview, its location (repo/file/line), and a confidence score. It
+    exists to support responsible disclosure: a human reviews the alert,
+    follows repo_url to verify, and (outside this tool) notifies the
+    repo owner so they can rotate the credential.
+    """
+
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    discovery_id: str | None = None  # links back to the Discovery this came from
+    repo_identity: str | None = None
+    repo_url: str
+    source_file: str | None = None
+    line_number: int
+    pattern_name: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    entropy: float
+    redacted_preview: str
+    context_line_redacted: str
+    discovered_at: datetime = Field(default_factory=now_utc)
+    status: Literal["new", "reviewed", "disclosed", "dismissed"] = "new"
+    notes: str | None = None
+
+    @field_validator("discovered_at", mode="before")
+    @classmethod
+    def utc_date(cls, value: datetime | str) -> datetime:
+        if isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        return ensure_utc(value)
+
+
 class QueryVariant(BaseModel):
     model_config = {"frozen": True}
     target: str
@@ -94,8 +127,12 @@ class Discovery(BaseModel):
 
     @field_validator("created_at", "updated_at", "pushed_at", "discovered_at", mode="before")
     @classmethod
-    def utc_dates(cls, value: datetime | None) -> datetime | None:
-        return ensure_utc(value) if value is not None else None
+    def utc_dates(cls, value: datetime | str | None) -> datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        return ensure_utc(value)
 
     @property
     def total_score(self) -> float:
@@ -120,3 +157,4 @@ class SearchError(BaseModel):
 class AdapterSearchResult(BaseModel):
     discoveries: list[Discovery] = Field(default_factory=list)
     errors: list[SearchError] = Field(default_factory=list)
+    leak_alerts: list[LeakAlert] = Field(default_factory=list)

@@ -9,7 +9,13 @@ from raven_targeter.core.date_validator import classify_dates
 from raven_targeter.core.deduplicator import deduplicate
 from raven_targeter.core.query_builder import build_queries
 from raven_targeter.core.scorer import score
-from raven_targeter.models import AdapterSearchResult, Discovery, SearchError, SearchRequest
+from raven_targeter.models import (
+    AdapterSearchResult,
+    Discovery,
+    LeakAlert,
+    SearchError,
+    SearchRequest,
+)
 
 
 class WebSearchAdapter(Protocol):
@@ -31,9 +37,10 @@ class SearchPipeline:
         request: SearchRequest,
         adapter: SearchAdapter | None = None,
         web_adapter: WebSearchAdapter | None = None,
-    ) -> tuple[list[Discovery], list[SearchError]]:
+    ) -> tuple[list[Discovery], list[SearchError], list[LeakAlert]]:
         hits: list[Discovery] = []
         errors: list[SearchError] = []
+        leak_alerts: list[LeakAlert] = []
 
         if adapter is not None:
             queries = build_queries(request)
@@ -50,6 +57,7 @@ class SearchPipeline:
                 )
                 hits.extend(result.discoveries)
                 errors.extend(result.errors)
+                leak_alerts.extend(result.leak_alerts)
 
         if request.web_search:
             if web_adapter is None:
@@ -106,4 +114,4 @@ class SearchPipeline:
         merged, _ = deduplicate(scored)
         final = [d for d in merged if d.total_score >= request.minimum_score]
         final.sort(key=lambda d: (-d.total_score, d.provider or "", d.title.lower()))
-        return final[: request.max_results_per_source], errors
+        return final[: request.max_results_per_source], errors, leak_alerts
