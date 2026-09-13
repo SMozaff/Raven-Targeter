@@ -10,3 +10,5 @@ dist/
 data/*.db*
 exports/*
 !exports/.gitkeep
+
+*.egg-info/
