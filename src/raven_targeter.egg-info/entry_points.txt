@@ -1,0 +1,2 @@
+[console_scripts]
+raven-hunter = raven_targeter.cli:main

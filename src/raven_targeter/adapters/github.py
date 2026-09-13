@@ -5,14 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import httpx
 
 from raven_targeter.config.aliases import get_aliases
 from raven_targeter.config.settings import Settings
 from raven_targeter.core.endpoint_extractor import extract_candidate_endpoints
-from raven_targeter.core.leak_detector import detect_leaks_raw, high_confidence_findings
+from raven_targeter.core.leak_detector import detect_leaks_raw
 from raven_targeter.core.sanitizer import find_matched_terms, redact_text
 from raven_targeter.models import (
     AdapterSearchResult,
@@ -338,7 +339,9 @@ class GitHubAdapter:
                     outcome = await self.verify_callback(finding.pattern_name, raw_secret)
                     alert = alert.model_copy(update={"verification": outcome})
                 except Exception:  # noqa: BLE001 - verification failure must not abort the scan
-                    pass
+                    logger.warning(
+                        "Credential verification failed for %s; skipping", finding.pattern_name
+                    )
 
             alerts.append(alert)
         return alerts

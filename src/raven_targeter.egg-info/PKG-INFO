@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: raven-targeter
+Version: 0.3.1
+Summary: Desktop GitHub discovery tool for recent user-created AI API projects and endpoints
+Requires-Python: >=3.12
+License-File: LICENSE
+Requires-Dist: httpx<1,>=0.28
+Requires-Dist: pydantic<3,>=2.10
+Requires-Dist: pydantic-settings<3,>=2.7
+Requires-Dist: SQLAlchemy<3,>=2
+Requires-Dist: python-dateutil<3,>=2.9
+Requires-Dist: PySide6<7,>=6.8
+Requires-Dist: keyring<27,>=25
+Provides-Extra: dev
+Requires-Dist: pytest<10,>=8; extra == "dev"
+Requires-Dist: pytest-asyncio<2,>=0.25; extra == "dev"
+Requires-Dist: ruff<1,>=0.9; extra == "dev"
+Provides-Extra: packaging
+Requires-Dist: pyinstaller<7,>=6; extra == "packaging"
+Dynamic: license-file

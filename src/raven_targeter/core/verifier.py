@@ -165,7 +165,7 @@ def provider_for_pattern(pattern_name: str) -> str | None:
         return "github"
     if low.startswith("aws"):
         return "aws"
-    if low.startswith("google") or low.startswith("gcp"):
+    if low.startswith(("google", "gcp")):
         return "google"
     if low.startswith("slack"):
         return "slack"
@@ -175,7 +175,7 @@ def provider_for_pattern(pattern_name: str) -> str | None:
         return "sendgrid"
     if low.startswith("twilio"):
         return "twilio"
-    if low.startswith("huggingface") or low.startswith("hf-"):
+    if low.startswith(("huggingface", "hf-")):
         return "huggingface"
     if low.startswith("deepseek"):
         return "deepseek"
