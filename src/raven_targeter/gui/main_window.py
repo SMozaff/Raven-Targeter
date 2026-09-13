@@ -1,4 +1,5 @@
-"""PySide6 desktop GUI with secure API configuration and background search."""
+"""PySide6 desktop GUI with secure API configuration, background search,
+leak alerts, and optional credential verification."""
 from __future__ import annotations
 
 import asyncio
@@ -25,17 +26,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from raven_targeter.adapters.github import GitHubAdapter
 from raven_targeter.adapters.serpapi import SerpAPIAdapter
 from raven_targeter.config.credential_store import CredentialStoreError, SecureCredentialStore
 from raven_targeter.config.settings import SEARCH_ENGINES, SEARCH_PROVIDERS, Settings
 from raven_targeter.models import SearchRequest
 from raven_targeter.services.export_service import export_json
-from raven_targeter.services.search_service import SearchPipeline
+from raven_targeter.services.hunter_export import export_json as export_hunter_json
+from raven_targeter.services.hunter_service import hunt
 
 
 class SearchWorker(QObject):
-    done = Signal(object, object, object)
+    done = Signal(object, object, object, object)  # discoveries, errors, alerts, report
     failed = Signal(str)
 
     def __init__(
@@ -47,6 +48,7 @@ class SearchWorker(QObject):
         search_api_key: str | None,
         search_provider: str,
         search_engine: str,
+        verify: bool = False,
     ) -> None:
         super().__init__()
         self.settings = settings
@@ -55,30 +57,25 @@ class SearchWorker(QObject):
         self.search_api_key = search_api_key
         self.search_provider = search_provider
         self.search_engine = search_engine
+        self.verify = verify
 
     @Slot()
     def run(self) -> None:
         async def go():
-            github = GitHubAdapter(self.github_token) if self.request.sources else None
-            web = None
-            if self.request.web_search and self.search_provider == "serpapi" and self.search_api_key:
-                web = SerpAPIAdapter(
-                    self.search_api_key,
-                    engine=self.search_engine,
-                    base_url=self.settings.search_api_base_url,
-                    max_queries=self.settings.search_api_max_queries,
-                )
-            try:
-                return await SearchPipeline().run(self.request, github, web)
-            finally:
-                if github is not None:
-                    await github.aclose()
-                if web is not None:
-                    await web.aclose()
+            report = await hunt(
+                self.request,
+                self.settings,
+                github_token=self.github_token,
+                search_api_key=self.search_api_key,
+                search_provider=self.search_provider,
+                search_engine=self.search_engine,
+                verify=self.verify,
+            )
+            return report.discoveries, report.errors, report.leak_alerts, report
 
         try:
-            discoveries, errors, leak_alerts = asyncio.run(go())
-            self.done.emit(discoveries, errors, leak_alerts)
+            discoveries, errors, leak_alerts, report = asyncio.run(go())
+            self.done.emit(discoveries, errors, leak_alerts, report)
         except Exception as exc:  # noqa: BLE001 - surfaced to GUI boundary
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
@@ -163,6 +160,7 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self._results = []
         self._leak_alerts = []
+        self._last_report = None
         self._thread: QThread | None = None
         self._worker: SearchWorker | None = None
         self._test_threads: list[QThread] = []
@@ -200,8 +198,16 @@ class MainWindow(QMainWindow):
         self.github_source.setChecked(True)
         self.web_source = QCheckBox("Web Search API")
         self.web_source.setChecked(False)
+        self.verify_check = QCheckBox("Verify credentials (contacts provider APIs)")
+        self.verify_check.setChecked(False)
+        self.verify_check.setToolTip(
+            "When checked, each high-confidence credential found is tested against "
+            "its provider's API. This makes real network calls to OpenAI, Anthropic, "
+            "GitHub, etc. Only enable when you intend to verify."
+        )
         source_row.addWidget(self.github_source)
         source_row.addWidget(self.web_source)
+        source_row.addWidget(self.verify_check)
         source_row.addStretch()
         layout.addWidget(source_box)
 
@@ -232,7 +238,7 @@ class MainWindow(QMainWindow):
 
         action_row = QHBoxLayout()
         self.start = QPushButton("Start Search")
-        self.export = QPushButton("Export for Raven-Validator")
+        self.export = QPushButton("Export Hunter Report (JSON)")
         self.export.setEnabled(False)
         self.open_settings = QPushButton("API Settings")
         action_row.addWidget(self.start)
@@ -281,9 +287,9 @@ class MainWindow(QMainWindow):
         self.disclosure_status = QLabel("No leak alerts yet.")
         layout.addWidget(self.disclosure_status)
 
-        self.disclosure_table = QTableWidget(0, 7)
+        self.disclosure_table = QTableWidget(0, 8)
         self.disclosure_table.setHorizontalHeaderLabels(
-            ["Confidence", "Pattern", "Preview", "Repo", "File", "Line", "Status"]
+            ["Confidence", "Pattern", "Preview", "Repo", "File", "Line", "Status", "Verification"]
         )
         self.disclosure_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.disclosure_table)
@@ -305,6 +311,14 @@ class MainWindow(QMainWindow):
     def _populate_disclosure_table(self) -> None:
         self.disclosure_table.setRowCount(len(self._leak_alerts))
         for row, alert in enumerate(self._leak_alerts):
+            verification_text = ""
+            if alert.verification is not None:
+                if alert.verification.kind == "valid":
+                    verification_text = "✓ valid"
+                elif alert.verification.kind == "invalid":
+                    verification_text = "✗ invalid"
+                else:
+                    verification_text = "— unverifiable"
             values = [
                 f"{alert.confidence:.2f}",
                 alert.pattern_name,
@@ -313,6 +327,7 @@ class MainWindow(QMainWindow):
                 alert.source_file or "",
                 str(alert.line_number),
                 alert.status,
+                verification_text,
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -606,7 +621,8 @@ class MainWindow(QMainWindow):
             source_names.append("GitHub")
         if self.web_source.isChecked():
             source_names.append("Web")
-        self.status.setText(f"Searching {' + '.join(source_names)}…")
+        verify_note = " + verify" if self.verify_check.isChecked() else ""
+        self.status.setText(f"Searching {' + '.join(source_names)}{verify_note}…")
         self._thread = QThread(self)
         self._worker = SearchWorker(
             self.settings,
@@ -615,6 +631,7 @@ class MainWindow(QMainWindow):
             search_api_key=search_key,
             search_provider=self.search_provider.currentText(),
             search_engine=self.search_engine.currentText(),
+            verify=self.verify_check.isChecked(),
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
@@ -630,9 +647,10 @@ class MainWindow(QMainWindow):
         self._thread = None
         self._update_start_state()
 
-    def _done(self, discoveries, errors, leak_alerts) -> None:
+    def _done(self, discoveries, errors, leak_alerts, report) -> None:
         self._results = discoveries
         self._leak_alerts = list(leak_alerts)
+        self._last_report = report
         self.table.setRowCount(len(discoveries))
         for row, discovery in enumerate(discoveries):
             values = [
@@ -650,16 +668,23 @@ class MainWindow(QMainWindow):
         status_parts = [f"{len(discoveries)} results", f"{len(errors)} source error(s)"]
         if self._leak_alerts:
             status_parts.append(f"{len(self._leak_alerts)} possible leak(s) — see Disclosure tab")
+        if report.metrics.valid_credentials > 0:
+            status_parts.append(f"✓ {report.metrics.valid_credentials} verified credential(s)")
         self.status.setText("Complete: " + ", ".join(status_parts))
-        self.export.setEnabled(bool(discoveries))
+        self.export.setEnabled(bool(discoveries) or bool(self._leak_alerts))
 
     def _failed(self, message: str) -> None:
         self.status.setText(message)
 
     def _export(self) -> None:
-        path = export_json(
-            self._results, Path("exports") / "raven-discovery-export-v1.json"
-        )
+        if self._last_report is not None:
+            path = export_hunter_json(
+                self._last_report, Path("exports") / "raven-hunter-report.json"
+            )
+        else:
+            path = export_json(
+                self._results, Path("exports") / "raven-discovery-export-v1.json"
+            )
         self.status.setText(f"Exported: {path}")
 
 

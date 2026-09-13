@@ -30,6 +30,18 @@ class CandidateEndpoint(BaseModel):
     source_file: str | None = None
 
 
+class VerifyOutcome(BaseModel):
+    """Result of testing a discovered credential against a provider API.
+
+    Exactly one of ``detail`` (valid/invalid) or ``reason`` (unverifiable) is set.
+    The raw credential value is never carried here.
+    """
+
+    kind: Literal["valid", "invalid", "unverifiable"]
+    detail: str | None = None
+    reason: str | None = None
+
+
 class LeakAlert(BaseModel):
     """Evidence that a likely credential leak exists at a public location.
 
@@ -41,7 +53,7 @@ class LeakAlert(BaseModel):
     """
 
     id: str = Field(default_factory=lambda: uuid4().hex)
-    discovery_id: str | None = None  # links back to the Discovery this came from
+    discovery_id: str | None = None
     repo_identity: str | None = None
     repo_url: str
     source_file: str | None = None
@@ -54,6 +66,7 @@ class LeakAlert(BaseModel):
     discovered_at: datetime = Field(default_factory=now_utc)
     status: Literal["new", "reviewed", "disclosed", "dismissed"] = "new"
     notes: str | None = None
+    verification: VerifyOutcome | None = None
 
     @field_validator("discovered_at", mode="before")
     @classmethod
@@ -158,3 +171,47 @@ class AdapterSearchResult(BaseModel):
     discoveries: list[Discovery] = Field(default_factory=list)
     errors: list[SearchError] = Field(default_factory=list)
     leak_alerts: list[LeakAlert] = Field(default_factory=list)
+
+
+class VerifiedCredential(BaseModel):
+    """A credential that a provider API confirmed is live.
+
+    Carries no raw secret — only the alert location, redacted preview, and
+    the provider's response.
+    """
+
+    alert_id: str
+    provider: str
+    repo_url: str
+    repo_identity: str | None = None
+    source_file: str | None = None
+    line_number: int
+    pattern_name: str
+    redacted_preview: str
+    outcome: VerifyOutcome
+    discovered_at: datetime = Field(default_factory=now_utc)
+
+
+class HunterMetrics(BaseModel):
+    discoveries: int = 0
+    leak_alerts: int = 0
+    alerts_verified: int = 0
+    valid_credentials: int = 0
+    invalid_credentials: int = 0
+    unverifiable_credentials: int = 0
+
+
+class HunterReport(BaseModel):
+    """Complete output of a hunt run — discoveries + alerts + verified creds."""
+
+    generated_at: datetime
+    request: SearchRequest
+    discoveries: list[Discovery] = Field(default_factory=list)
+    leak_alerts: list[LeakAlert] = Field(default_factory=list)
+    verified_credentials: list[VerifiedCredential] = Field(default_factory=list)
+    errors: list[SearchError] = Field(default_factory=list)
+    metrics: HunterMetrics = Field(default_factory=HunterMetrics)
+
+
+# Resolve forward refs for LeakAlert.verification
+LeakAlert.model_rebuild()

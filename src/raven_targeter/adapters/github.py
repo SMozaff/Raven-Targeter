@@ -1,17 +1,18 @@
-"""GitHub REST discovery adapter with endpoint enrichment and rate-bucket tracking."""
+"""GitHub REST discovery adapter with endpoint enrichment, leak detection,
+and optional credential verification."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 
 from raven_targeter.config.aliases import get_aliases
 from raven_targeter.config.settings import Settings
 from raven_targeter.core.endpoint_extractor import extract_candidate_endpoints
-from raven_targeter.core.leak_detector import detect_leaks, high_confidence_findings
+from raven_targeter.core.leak_detector import detect_leaks_raw, high_confidence_findings
 from raven_targeter.core.sanitizer import find_matched_terms, redact_text
 from raven_targeter.models import (
     AdapterSearchResult,
@@ -19,6 +20,7 @@ from raven_targeter.models import (
     LeakAlert,
     QueryVariant,
     SearchError,
+    VerifyOutcome,
 )
 from raven_targeter.utils.dates import parse_github_timestamp
 from raven_targeter.utils.urls import canonical_repo_identity, canonicalize_url
@@ -33,6 +35,8 @@ ENDPOINTS = {
 }
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 MAX_RATE_WAIT = 60.0
+
+VerifyCallback = Callable[[str, str], Awaitable[VerifyOutcome]]
 
 
 def build_q(q: QueryVariant) -> str:
@@ -59,6 +63,7 @@ class GitHubAdapter:
         max_attempts: int = 3,
         max_enrich_per_group: int = 20,
         transport: httpx.AsyncBaseTransport | None = None,
+        verify_callback: VerifyCallback | None = None,
     ) -> None:
         self.token = token.strip() if token else None
         self.timeout = timeout
@@ -66,6 +71,7 @@ class GitHubAdapter:
         self.max_attempts = max_attempts
         self.max_enrich = max_enrich_per_group
         self.transport = transport
+        self.verify_callback = verify_callback
         self._client: httpx.AsyncClient | None = None
         self.rate_buckets: dict[str, tuple[int | None, float | None]] = {}
 
@@ -176,7 +182,6 @@ class GitHubAdapter:
                     discoveries.append(self._normalize(q, item))
                 except (KeyError, TypeError, ValueError) as exc:
                     errors.append(SearchError(source=f"github:{q.search_type}", message=f"Malformed item: {exc}"))
-        # Enrich only a bounded shortlist for this query group.
         if discoveries and queries:
             kind = queries[0].search_type
             if kind == "repository":
@@ -260,7 +265,7 @@ class GitHubAdapter:
                 continue
             raw_text = response.text[:15000]
             leak_alerts.extend(
-                self._build_leak_alerts(raw_text, discovery=d, source_file="README")
+                await self._build_leak_alerts(raw_text, discovery=d, source_file="README")
             )
             text = redact_text(raw_text)
             endpoints = extract_candidate_endpoints(text, source_file="README")
@@ -290,7 +295,7 @@ class GitHubAdapter:
                 continue
             raw_text = response.text[:12000]
             leak_alerts.extend(
-                self._build_leak_alerts(raw_text, discovery=d, source_file=d.source_path)
+                await self._build_leak_alerts(raw_text, discovery=d, source_file=d.source_path)
             )
             text = redact_text(raw_text)
             endpoints = extract_candidate_endpoints(text, source_file=d.source_path)
@@ -300,33 +305,42 @@ class GitHubAdapter:
             })
             count += 1
 
-    @staticmethod
-    def _build_leak_alerts(
-        raw_text: str, *, discovery: Discovery, source_file: str | None
+    async def _build_leak_alerts(
+        self, raw_text: str, *, discovery: Discovery, source_file: str | None
     ) -> list[LeakAlert]:
-        """Run leak detection on raw (pre-redaction) text.
+        """Run leak detection on raw text; optionally verify high-confidence hits.
 
-        Only ever produces LeakAlert objects, whose fields are already
-        redacted/scored by leak_detector — the raw_text itself is never
-        stored, logged, or attached to the returned alerts.
+        Uses detect_leaks_raw so the raw secret is available for the verifier
+        callback — it is never stored on the LeakAlert, logged, or exported.
         """
-        findings = detect_leaks(raw_text, source_file=source_file)
-        alerts = []
-        for finding in high_confidence_findings(findings):
-            alerts.append(
-                LeakAlert(
-                    discovery_id=discovery.id,
-                    repo_identity=discovery.repo_identity,
-                    repo_url=discovery.url,
-                    source_file=finding.source_file,
-                    line_number=finding.line_number,
-                    pattern_name=finding.pattern_name,
-                    confidence=finding.confidence,
-                    entropy=finding.entropy,
-                    redacted_preview=finding.redacted_preview,
-                    context_line_redacted=finding.context_line_redacted,
-                )
+        alerts: list[LeakAlert] = []
+        for finding, raw_secret in detect_leaks_raw(raw_text, source_file=source_file):
+            if finding.suppressed_reason is not None:
+                continue
+            if finding.confidence < 0.6:
+                continue
+
+            alert = LeakAlert(
+                discovery_id=discovery.id,
+                repo_identity=discovery.repo_identity,
+                repo_url=discovery.url,
+                source_file=finding.source_file,
+                line_number=finding.line_number,
+                pattern_name=finding.pattern_name,
+                confidence=finding.confidence,
+                entropy=finding.entropy,
+                redacted_preview=finding.redacted_preview,
+                context_line_redacted=finding.context_line_redacted,
             )
+
+            if self.verify_callback is not None:
+                try:
+                    outcome = await self.verify_callback(finding.pattern_name, raw_secret)
+                    alert = alert.model_copy(update={"verification": outcome})
+                except Exception:  # noqa: BLE001 - verification failure must not abort the scan
+                    pass
+
+            alerts.append(alert)
         return alerts
 
     @staticmethod
