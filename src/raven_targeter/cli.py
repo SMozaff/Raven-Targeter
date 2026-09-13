@@ -7,6 +7,8 @@ import os
 import sys
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from raven_targeter.config.settings import DEFAULT_TARGETS, get_settings
 from raven_targeter.models import SearchRequest
 from raven_targeter.services.hunter_export import export_csv, export_json
@@ -42,14 +44,18 @@ async def _run(args: argparse.Namespace) -> int:
     targets = [t.strip().lower() for t in args.targets.split(",") if t.strip()]
     keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
 
-    request = SearchRequest(
-        targets=targets,
-        keywords=keywords,
-        lookback_days=args.lookback,
-        max_results_per_source=args.max_results,
-        sources=["repository", "code", "issue", "pull_request"],
-        web_search=False,
-    )
+    try:
+        request = SearchRequest(
+            targets=targets,
+            keywords=keywords,
+            lookback_days=args.lookback,
+            max_results_per_source=args.max_results,
+            sources=["repository", "code", "issue", "pull_request"],
+            web_search=False,
+        )
+    except ValidationError as exc:
+        print(f"[error] invalid arguments: {exc.errors()[0]['msg']}", file=sys.stderr)
+        return 2
 
     if not args.quiet:
         print(
